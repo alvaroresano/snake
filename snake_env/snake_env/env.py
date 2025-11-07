@@ -1,190 +1,153 @@
-# Import necessary libraries
 import gymnasium as gym
 from gymnasium import spaces
 import numpy as np
 import cv2
 import random
-import time
 from collections import deque
 
-# Set the goal length for the snake
+# Goal length that normalizes the length feature
 SNAKE_LEN_GOAL = 30
-# History of actions in the state
+# History of actions in the observation
 STACKED_ACTIONS = 5
 
-# Define the size of the game table for observation and gameplay
-tableSizeObs = 500 # control of the grid size
-tableSize = 500
-halfTable = int(tableSize / 2)
 
-# Initialize max score
-max_score = 0
-
-# Function to handle collision with apple and update score
-def collision_with_apple(apple_position, score):
-    # Generate new random apple position within the game table
-    apple_position = [random.randrange(1, tableSize // 10) * 10, random.randrange(1, tableSize // 10) * 10]
-    score += 1  # Increment the score
-    return apple_position, score
-
-# Function to check if the snake head collides with game boundaries
-def collision_with_boundaries(snake_head):
-    if snake_head[0] >= tableSize or snake_head[0] < 0 or snake_head[1] >= tableSize or snake_head[1] < 0:
-        return True
-    else:
-        return False
-
-# Function to check if the snake collides with itself
-def collision_with_self(snake_position):
-    snake_head = snake_position[0]
-    if snake_head in snake_position[1:]:
-        return True
-    else:
-        return False
-
-# Define custom snake game environment class inheriting from gym's Env class
 class SnakeEnv(gym.Env):
+    """Custom Snake environment with lightweight tabular observations."""
+
     metadata = {
         "render_modes": ["human", "rgb_array"],
-        "render_fps": 10
+        "render_fps": 10,
     }
-    
 
-    def __init__(self, render_mode=None, action_size=1, render_fps=10):
-        super(SnakeEnv, self).__init__()
-        # Define the action space: 4 discrete actions (left, right, up, down)
+    def __init__(
+        self,
+        *,
+        grid_size: int = 200,
+        cell_size: int = 10,
+        render_mode: str | None = None,
+        render_fps: int = 10,
+        action_size: int = 1,
+        max_steps: int = 1000,
+        max_steps_without_food: int | None = None,
+        reward_config: dict | None = None,
+    ):
+        super().__init__()
+
+        if grid_size % cell_size != 0:
+            raise ValueError("grid_size must be divisible by cell_size.")
+
+        self.grid_size = grid_size
+        self.cell_size = cell_size
+        self.render_mode = render_mode
+        self.render_fps = render_fps
+        self.action_size = action_size
+        self.max_steps = max_steps
+        self.max_steps_without_food = max_steps_without_food or max_steps // 2
+        self.reward_config = reward_config or {
+            "apple": 20.0,
+            "death": -24.0,
+            "distance": 0.3,
+            "step": -0.5,
+        }
+
         self.action_space = spaces.Discrete(4)
-        
-        # Define the observation space: a Box with size based on snake length goal and other game parameters
-        self.observation_space = spaces.Box(
-            low=-tableSizeObs,
-            high=tableSizeObs,
-            shape=(5 + STACKED_ACTIONS,),
-            dtype=np.float64
+
+        obs_low = np.array(
+            [0.0, 0.0, -1.0, -1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+            + [-1.0] * STACKED_ACTIONS,
+            dtype=np.float32,
         )
-        
-        # Initialize game display and reward variables
-        self.img = np.zeros((tableSize, tableSize, 3), dtype='uint8')
-        self.prev_reward = 0
-        self.total_reward = 0
+        obs_high = np.array(
+            [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, np.sqrt(2), np.sqrt(2)]
+            + [3.0] * STACKED_ACTIONS,
+            dtype=np.float32,
+        )
+
+        self.observation_space = spaces.Box(
+            low=obs_low,
+            high=obs_high,
+            dtype=np.float32,
+        )
+
+        self.img = np.zeros((self.grid_size, self.grid_size, 3), dtype="uint8")
         self.score = 0
         self.max_score = 0
-
-        # rendering
-        self.render_mode = render_mode
-        self.render_fps = render_fps 
-
-        # number of cells the snake moves in each step
-        self.action_size = action_size
+        self.prev_actions: deque[int] = deque(maxlen=STACKED_ACTIONS)
+        self.steps_since_reset = 0
+        self.steps_since_last_apple = 0
 
     # Step function that updates the environment after an action is taken
     def step(self, action):
         # Store previous actions
         self.prev_actions.append(action)
+        self.steps_since_reset += 1
+        self.steps_since_last_apple += 1
 
-        # Calculate previous distance to the apple
-        prev_distance = np.linalg.norm(np.array(self.snake_head) - np.array(self.apple_position))
-
-        # Perform the action
+        prev_distance = self._distance_to_apple()
         self._take_action(action)
 
-        # Initialize reward
-        reward = 0
+        reward = self.reward_config["step"]
+        ate_apple = self.snake_head == self.apple_position
 
-        # Check if snake eats the apple
-        if self.snake_head == self.apple_position:
-            self.apple_position, self.score = collision_with_apple(self.apple_position, self.score)
+        if ate_apple:
+            self.apple_position = self._spawn_apple()
             self.snake_position.insert(0, list(self.snake_head))
-            reward += 10  # Reward for eating an apple
+            reward += self.reward_config["apple"]
+            self.score += 1
+            self.steps_since_last_apple = 0
         else:
             self.snake_position.insert(0, list(self.snake_head))
             self.snake_position.pop()
 
-        # Check for collisions (with boundaries or self)
-        terminated = collision_with_boundaries(self.snake_head) or collision_with_self(self.snake_position)
-        truncated = False
-
-        # Handle termination (game over) scenario
+        terminated = self._collision_with_boundaries() or self._collision_with_self()
         if terminated:
-            reward -= 10  # Penalty for dying
+            reward += self.reward_config["death"]
         else:
-            # Calculate the current distance to the apple
-            current_distance = np.linalg.norm(np.array(self.snake_head) - np.array(self.apple_position))
-
-            # Reward for getting closer to the apple, penalty for moving away
+            current_distance = self._distance_to_apple()
             if current_distance < prev_distance:
-                reward += 1
+                reward += self.reward_config["distance"]
             else:
-                reward -= 1
+                reward -= self.reward_config["distance"]
 
-        # Small penalty for each step (optional)
-        reward -= 0.1
+        truncated = (
+            self.steps_since_reset >= self.max_steps
+            or self.steps_since_last_apple >= self.max_steps_without_food
+        )
 
-        # Information dictionary
         info = {}
 
-        # Create observation of the current state
-        head_x = self.snake_head[0]
-        head_y = self.snake_head[1]
-        snake_length = len(self.snake_position)
-        apple_delta_x = self.apple_position[0] - head_x
-        apple_delta_y = self.apple_position[1] - head_y
-
-        observation = [head_x, head_y, apple_delta_x, apple_delta_y, snake_length] + list(self.prev_actions)
-        observation = np.array(observation, dtype=np.float64)
-
+        observation = self._get_observation()
         return observation, reward, terminated, truncated, info
 
     # Reset the environment to the initial state
     def reset(self, *, seed=None, options=None):
         super().reset(seed=seed)
-        # Reset game board
-        self.img = np.zeros((tableSize, tableSize, 5), dtype='uint8')
-        
-        # Reset snake position
+        self.img = np.zeros((self.grid_size, self.grid_size, 3), dtype="uint8")
+
+        half_table = self.grid_size // 2
         self.snake_position = [
-            [halfTable, halfTable],
-            [halfTable - 10, halfTable],
-            [halfTable - 20, halfTable]
+            [half_table, half_table],
+            [half_table - self.cell_size, half_table],
+            [half_table - 2 * self.cell_size, half_table],
         ]
-        
-        # Generate random apple position
-        self.apple_position = [
-            random.randrange(1, tableSize // 10) * 10,
-            random.randrange(1, tableSize // 10) * 10
-        ]
-        
-        # Update max score if needed
+
+        self.apple_position = self._spawn_apple()
+
         if self.score > self.max_score:
             self.max_score = self.score
             print(f"New maximum score registered: {self.max_score}")
-        
-        # Reset score and snake head position
+
         self.score = 0
-        self.snake_head = [halfTable, halfTable]
-
-        # Initialize direction of the snake
+        self.snake_head = [half_table, half_table]
         self.direction = 1
+        self.steps_since_reset = 0
+        self.steps_since_last_apple = 0
 
-        # Reset reward values
-        self.prev_reward = 0
-        self.total_reward = 0
-
-        # Create observation of the current state
-        head_x = self.snake_head[0]
-        head_y = self.snake_head[1]
-        snake_length = len(self.snake_position)
-        apple_delta_x = self.apple_position[0] - head_x
-        apple_delta_y = self.apple_position[1] - head_y
-
-        # Initialize deque to store previous actions
         self.prev_actions = deque(maxlen=STACKED_ACTIONS)
         for _ in range(STACKED_ACTIONS):
             self.prev_actions.append(-1)
 
-        observation = [head_x, head_y, apple_delta_x, apple_delta_y, snake_length] + list(self.prev_actions)
-        observation = np.array(observation, dtype=np.float64)
-
+        observation = self._get_observation()
         return observation, {}
 
     # Render the game visually using OpenCV
@@ -208,25 +171,25 @@ class SnakeEnv(gym.Env):
 
     # Update the UI with the current positions of the snake and the apple
     def _update_ui(self):
-        # Clear the game board
-        self.img = np.zeros((tableSize, tableSize, 3), dtype='uint8')
-        
-        # Draw apple on the board
+        self.img = np.zeros((self.grid_size, self.grid_size, 3), dtype="uint8")
+
         cv2.rectangle(
             self.img,
             (self.apple_position[0], self.apple_position[1]),
-            (self.apple_position[0] + 10, self.apple_position[1] + 10),
+            (
+                self.apple_position[0] + self.cell_size,
+                self.apple_position[1] + self.cell_size,
+            ),
             (0, 0, 255),
             -1
         )
-        
-        # Draw snake on the board
-        for _i,position in enumerate(self.snake_position):
+
+        for _i, position in enumerate(self.snake_position):
 
             cv2.rectangle(
                 self.img,
                 (position[0], position[1]),
-                (position[0] + 10, position[1] + 10),
+                (position[0] + self.cell_size, position[1] + self.cell_size),
                 (0, 255, 255) if _i == 0 else (0, 255, 0),
                 -1
             )
@@ -246,12 +209,117 @@ class SnakeEnv(gym.Env):
         # Update direction based on the action
         self.direction = action
 
-        # Move the snake head according to the action
-        if action == 0:  # Move left
-            self.snake_head[0] -= 10*self.action_size
-        elif action == 1:  # Move right
-            self.snake_head[0] += 10*self.action_size
-        elif action == 2:  # Move down
-            self.snake_head[1] += 10*self.action_size
-        elif action == 3:  # Move up
-            self.snake_head[1] -= 10*self.action_size
+        delta = self.cell_size * self.action_size
+        if action == 0: # Left
+            self.snake_head[0] -= delta
+        elif action == 1: # Right
+            self.snake_head[0] += delta
+        elif action == 2: # Down
+            self.snake_head[1] += delta
+        elif action == 3: # Up
+            self.snake_head[1] -= delta
+
+    def _spawn_apple(self):
+        max_cells = self.grid_size // self.cell_size
+        while True:
+            apple = [
+                random.randrange(0, max_cells) * self.cell_size,
+                random.randrange(0, max_cells) * self.cell_size,
+            ]
+            if apple not in self.snake_position:
+                return apple
+
+    def _collision_with_boundaries(self):
+        return (
+            self.snake_head[0] >= self.grid_size
+            or self.snake_head[0] < 0
+            or self.snake_head[1] >= self.grid_size
+            or self.snake_head[1] < 0
+        )
+
+    def _collision_with_self(self):
+        return self.snake_head in self.snake_position[1:]
+
+    def _distance_to_apple(self):
+        return np.linalg.norm(np.array(self.snake_head) - np.array(self.apple_position))
+
+    def _get_observation(self):
+        head_x = self.snake_head[0] / self.grid_size
+        head_y = self.snake_head[1] / self.grid_size
+        apple_delta_x = (self.apple_position[0] - self.snake_head[0]) / self.grid_size
+        apple_delta_y = (self.apple_position[1] - self.snake_head[1]) / self.grid_size
+        snake_length = min(len(self.snake_position) / SNAKE_LEN_GOAL, 1.0)
+
+        body_in_direction, apple_in_direction = self._directional_sensors()
+        wall_distance = self._distance_to_wall_in_direction()
+        apple_distance = self._distance_to_apple() / self.grid_size
+        body_distance = self._distance_to_body() / self.grid_size
+
+        observation = np.array(
+            [
+                head_x,
+                head_y,
+                apple_delta_x,
+                apple_delta_y,
+                snake_length,
+                body_in_direction,
+                apple_in_direction,
+                wall_distance,
+                apple_distance,
+                body_distance,
+            ]
+            + list(self.prev_actions),
+            dtype=np.float32,
+        )
+        return observation
+
+    def _direction_vector(self):
+        if self.direction == 0:
+            return (-1, 0)
+        if self.direction == 1:
+            return (1, 0)
+        if self.direction == 2:
+            return (0, 1)
+        return (0, -1)
+
+    def _directional_sensors(self):
+        dx, dy = self._direction_vector()
+        cursor = list(self.snake_head)
+        apple_seen = 0.0
+        body_seen = 0.0
+        while True:
+            cursor[0] += dx * self.cell_size
+            cursor[1] += dy * self.cell_size
+            if (
+                cursor[0] < 0
+                or cursor[0] >= self.grid_size
+                or cursor[1] < 0
+                or cursor[1] >= self.grid_size
+            ):
+                break
+            if cursor == self.apple_position and not apple_seen:
+                apple_seen = 1.0
+            if cursor in self.snake_position[1:]:
+                body_seen = 1.0
+                break
+        return body_seen, apple_seen
+
+    def _distance_to_wall_in_direction(self):
+        dx, dy = self._direction_vector()
+        if dx == -1:
+            dist = self.snake_head[0]
+        elif dx == 1:
+            dist = self.grid_size - (self.snake_head[0] + self.cell_size)
+        elif dy == -1:
+            dist = self.snake_head[1]
+        else:
+            dist = self.grid_size - (self.snake_head[1] + self.cell_size)
+        return dist / self.grid_size
+
+    def _distance_to_body(self):
+        if len(self.snake_position) <= 1:
+            return self.grid_size
+        head = np.array(self.snake_head)
+        body = np.array(self.snake_position[1:])
+        dists = np.linalg.norm(body - head, axis=1)
+        return np.min(dists)
