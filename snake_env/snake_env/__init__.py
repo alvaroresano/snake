@@ -25,3 +25,9 @@ register(
     max_episode_steps=500,
     reward_threshold=30,
 )
+
+register(
+    id='Snake-Base-For-Wrapping-v0',
+    entry_point='snake_env.env:SnakeEnv',
+    max_episode_steps=10000, # Le ponemos el límite de pasos aquí
+)
