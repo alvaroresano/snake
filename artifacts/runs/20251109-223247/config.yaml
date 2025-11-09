@@ -1,0 +1,43 @@
+env:
+  grid_size: 200
+  cell_size: 10
+  render_mode: null
+  render_fps: 10
+  action_size: 1
+  max_steps: 1000
+  max_steps_without_food: 500
+  reward_config:
+    apple: 10.0
+    death: -10.0
+    distance: 1.0
+    step: -0.1
+training:
+  policy: MlpPolicy
+  learning_rate: 0.00025
+  buffer_size: 50000
+  learning_starts: 1000
+  batch_size: 64
+  tau: 1.0
+  gamma: 0.99
+  train_freq: 4
+  gradient_steps: 1
+  target_update_interval: 1000
+  exploration_fraction: 0.1
+  exploration_final_eps: 0.02
+  verbose: 1
+  device: cuda
+  total_timesteps: 2000000
+  num_envs: 1
+seed: 0
+callbacks:
+  checkpoint_freq: 10000
+  checkpoint_prefix: snake_dqn
+  eval_freq: 20000
+  n_eval_episodes: 5
+  deterministic_eval: true
+logging:
+  run_root: artifacts/runs
+  checkpoint_dir: artifacts/checkpoints
+  tensorboard_dir: artifacts/tensorboard
+  eval_log_dir: artifacts/eval
+  final_model_path: artifacts/snake_dqn_final

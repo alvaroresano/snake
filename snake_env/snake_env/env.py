@@ -2,7 +2,6 @@ import gymnasium as gym
 from gymnasium import spaces
 import numpy as np
 import cv2
-import random
 from collections import deque
 
 # Goal length that normalizes the length feature
@@ -86,6 +85,7 @@ class SnakeEnv(gym.Env):
         prev_distance = self._distance_to_apple()
         self._take_action(action)
 
+        current_distance = self._distance_to_apple()
         reward = self.reward_config["step"]
         ate_apple = self.snake_head == self.apple_position
 
@@ -102,8 +102,7 @@ class SnakeEnv(gym.Env):
         terminated = self._collision_with_boundaries() or self._collision_with_self()
         if terminated:
             reward += self.reward_config["death"]
-        else:
-            current_distance = self._distance_to_apple()
+        elif not ate_apple:
             if current_distance < prev_distance:
                 reward += self.reward_config["distance"]
             else:
@@ -114,7 +113,14 @@ class SnakeEnv(gym.Env):
             or self.steps_since_last_apple >= self.max_steps_without_food
         )
 
-        info = {}
+        info = {
+            "score": self.score,
+            "snake_length": len(self.snake_position),
+            "steps": self.steps_since_reset,
+            "steps_since_last_apple": self.steps_since_last_apple,
+            "ate_apple": ate_apple,
+            "distance_to_apple": current_distance / self.grid_size,
+        }
 
         observation = self._get_observation()
         return observation, reward, terminated, truncated, info
@@ -221,10 +227,11 @@ class SnakeEnv(gym.Env):
 
     def _spawn_apple(self):
         max_cells = self.grid_size // self.cell_size
+        rng = getattr(self, "np_random", np.random.default_rng())
         while True:
             apple = [
-                random.randrange(0, max_cells) * self.cell_size,
-                random.randrange(0, max_cells) * self.cell_size,
+                int(rng.integers(0, max_cells)) * self.cell_size,
+                int(rng.integers(0, max_cells)) * self.cell_size,
             ]
             if apple not in self.snake_position:
                 return apple

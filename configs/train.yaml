@@ -26,9 +26,11 @@ training:
   exploration_fraction: 0.1
   exploration_final_eps: 0.02
   verbose: 1
-  device: auto
-  total_timesteps: 1000000
+  device: cuda
+  total_timesteps: 2000000
   num_envs: 1
+
+seed: 0
 
 callbacks:
   checkpoint_freq: 10000
@@ -38,6 +40,7 @@ callbacks:
   deterministic_eval: true
 
 logging:
+  run_root: artifacts/runs
   checkpoint_dir: artifacts/checkpoints
   tensorboard_dir: artifacts/tensorboard
   eval_log_dir: artifacts/eval
