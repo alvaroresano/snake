@@ -23,6 +23,7 @@ Snake coordinates range up to the grid size (default 200). Feeding raw pixels in
 - `logging`: artifact directories (run root, TensorBoard, checkpoints, eval stats, final model base path).
 - `seed`: master seed for SB3, Gymnasium, NumPy, and PyTorch.
 - `hydra`: pins Hydra's run/output dirs so files stay in the project root (the script itself handles per-run artifact folders).
+- `hydra.sweeper`: configuration for the Optuna sweeper, defining the hyperparameter search space, direction (`maximize`), and number of trials.
 
 ### Running training
 
@@ -47,6 +48,49 @@ Hydra validates keys, so typos are caught early. Every run writes:
 - `artifacts/eval/<run-id>/` - evaluation CSVs + best-model snapshots from `EvalCallback`.
 - `artifacts/snake_dqn_final_<run-id>.zip` - final policy after `total_timesteps`.
 - `artifacts/runs/<run-id>/config.yaml` + `monitor/train|eval/*.monitor.csv` - config snapshot and per-episode monitor traces.
+
+### Hyperparameter Optimization (Optuna + Hydra Sweeper)
+
+Beyond single runs, the pipeline is integrated with Optuna to automate the search for optimal hyperparameters. This is managed by Hydra's "Sweeper" plugin.
+
+The configuration for the optimization lives inside `configs/train.yaml` under the `hydra.sweeper` key. It defines which parameters to vary and over what range.
+
+```yaml
+# configs/train.yaml
+
+# ... (env, training, callbacks sections) ...
+
+# --- Optuna Sweeper Configuration ---
+defaults:
+  - override hydra/sweeper: optuna
+
+hydra:
+  # ... (run/output_subdir config) ...
+  sweeper:
+    _target_: hydra_plugins.hydra_optuna_sweeper.optuna_sweeper.OptunaSweeper
+    # We tell Optuna to maximize the return value of train.py (best_mean_reward)
+    direction: maximize
+    # Total number of different hyperparameter combinations to try
+    n_trials: 100
+    # Number of trials to run in parallel
+    n_jobs: 1
+    
+    # The search space. Optuna will pick values from here for each trial.
+    # The key (e.g., 'training.learning_rate') must match its path in this file.
+    params:
+      training.learning_rate: tag(log, interval(1e-5, 1e-2))
+      training.gamma: choice(0.9, 0.95, 0.99, 0.995)
+      training.exploration_fraction: choice(0.1, 0.2, 0.5)
+      training.batch_size: choice(32, 64, 128, 256)```
+```
+#### Running the optimization
+To start the hyperparameter search, simply run the training script with the `--multirun` flag. Hydra will automatically activate the Optuna sweeper.
+
+```bash
+python3 train.py --multirun
+```
+This will launch `n_trials` (e.g., 100 as configured above) training jobs in sequence. Each job will use a different combination of hyperparameters suggested by Optuna. The process will take a significant amount of time, but it will systematically explore the search space to find the best-performing configuration.
+
 
 ### TensorBoard essentials
 
