@@ -77,7 +77,7 @@ class SnakeEnv(gym.Env):
 
     # Step function that updates the environment after an action is taken
     def step(self, action):
-        # Store previous actions
+    # Store previous actions
         self.prev_actions.append(action)
         self.steps_since_reset += 1
         self.steps_since_last_apple += 1
@@ -108,6 +108,24 @@ class SnakeEnv(gym.Env):
             else:
                 reward -= self.reward_config["distance"]
 
+        proximity_penalty = 0.0
+        if not terminated:
+            head_x, head_y = self.snake_head
+
+            cells_to_check = [
+                (head_x, head_y - 1),  # Arriba
+                (head_x, head_y + 1),  # Abajo
+                (head_x - 1, head_y),  # Izquierda
+                (head_x + 1, head_y)   # Derecha
+            ]
+
+            for pos in cells_to_check:
+                if pos in self.snake_position[1:]:
+                    proximity_penalty = self.reward_config.get("risk_penalty", 0.0)
+                    break
+
+        reward += proximity_penalty
+        
         truncated = (
             self.steps_since_reset >= self.max_steps
             or self.steps_since_last_apple >= self.max_steps_without_food

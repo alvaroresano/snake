@@ -11,24 +11,26 @@ env:
     death: -10.0
     distance: 1.0
     step: -0.1
+    risk_penalty: -0.2
 
 training:
   policy: MlpPolicy
-  learning_rate: 0.00025
+  learning_rate: 0.0010018272023715146
   buffer_size: 50000
   learning_starts: 1000
   batch_size: 64
   tau: 1.0
-  gamma: 0.99
+  gamma: 0.95
   train_freq: 4
   gradient_steps: 1
-  target_update_interval: 1000
-  exploration_fraction: 0.1
+  target_update_interval: 5000
+  exploration_fraction: 0.5
   exploration_final_eps: 0.02
   verbose: 1
   device: cuda
-  total_timesteps: 2000000
+  total_timesteps: 5000000 
   num_envs: 1
+  load_from_checkpoint: null
 
 seed: 0
 
@@ -46,7 +48,26 @@ logging:
   eval_log_dir: artifacts/eval
   final_model_path: artifacts/snake_dqn_final
 
+
+
 hydra:
   run:
     dir: .
   output_subdir: null
+
+
+  # sweeper:
+  #   _target_: hydra_plugins.hydra_optuna_sweeper.optuna_sweeper.OptunaSweeper
+  #   direction: maximize
+  #   study_name: snake_optimization
+  #   n_trials: 100
+  #   n_jobs: 1
+    
+  #   # El espacio de búsqueda que se usó en la optimización
+  #   params:
+  #     training.learning_rate: tag(log, interval(1e-5, 1e-2))
+  #     training.gamma: choice(0.9, 0.95, 0.99, 0.995)
+  #     training.exploration_fraction: choice(0.1, 0.2, 0.5)
+  #     training.batch_size: choice(32, 64, 128, 256)
+  #     training.target_update_interval: choice(1000, 5000, 10000)
+

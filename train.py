@@ -40,13 +40,14 @@ def make_env(
 
 
 @hydra.main(config_path="configs", config_name="train", version_base=None)
-def main(cfg: DictConfig):
+def main(cfg: DictConfig) -> float:
     seed = int(getattr(cfg, "seed", 0))
     set_random_seed(seed)
 
     env_kwargs = dict(OmegaConf.to_container(cfg.env, resolve=True))
     logging_cfg = dict(OmegaConf.to_container(cfg.logging, resolve=True))
     training_cfg = dict(OmegaConf.to_container(cfg.training, resolve=True))
+    checkpoint_to_load = training_cfg.get("load_from_checkpoint", None)
     callbacks_cfg = dict(OmegaConf.to_container(cfg.callbacks, resolve=True))
 
     run_id = datetime.now().strftime("%Y%m%d-%H%M%S")
@@ -87,25 +88,31 @@ def main(cfg: DictConfig):
         final_model_path = final_model_path.with_suffix(".zip")
     final_model_path.parent.mkdir(parents=True, exist_ok=True)
 
-    model = DQN(
-        training_cfg["policy"],
-        env,
-        learning_rate=training_cfg["learning_rate"],
-        buffer_size=training_cfg["buffer_size"],
-        learning_starts=training_cfg["learning_starts"],
-        batch_size=training_cfg["batch_size"],
-        tau=training_cfg["tau"],
-        gamma=training_cfg["gamma"],
-        train_freq=training_cfg["train_freq"],
-        gradient_steps=training_cfg["gradient_steps"],
-        target_update_interval=training_cfg["target_update_interval"],
-        exploration_fraction=training_cfg["exploration_fraction"],
-        exploration_final_eps=training_cfg["exploration_final_eps"],
-        tensorboard_log=str(tensorboard_dir),
-        verbose=training_cfg["verbose"],
-        device=training_cfg["device"],
-        seed=seed,
-    )
+    if checkpoint_to_load:
+        print(f"Loading model from: {checkpoint_to_load}")
+        model = DQN.load(checkpoint_to_load, env=env)
+        model.learning_rate = training_cfg["learning_rate"]
+    else:
+        print("Creating new model")
+        model = DQN(
+            training_cfg["policy"],
+            env,
+            learning_rate=training_cfg["learning_rate"],
+            buffer_size=training_cfg["buffer_size"],
+            learning_starts=training_cfg["learning_starts"],
+            batch_size=training_cfg["batch_size"],
+            tau=training_cfg["tau"],
+            gamma=training_cfg["gamma"],
+            train_freq=training_cfg["train_freq"],
+            gradient_steps=training_cfg["gradient_steps"],
+            target_update_interval=training_cfg["target_update_interval"],
+            exploration_fraction=training_cfg["exploration_fraction"],
+            exploration_final_eps=training_cfg["exploration_final_eps"],
+            tensorboard_log=str(tensorboard_dir),
+            verbose=0,
+            device=training_cfg["device"],
+            seed=seed,
+        )
 
     checkpoint_callback = CheckpointCallback(
         save_freq=callbacks_cfg["checkpoint_freq"],
@@ -134,9 +141,13 @@ def main(cfg: DictConfig):
         callback=CallbackList(callback_list),
     )
 
+    best_mean_reward = eval_callback.best_mean_reward
+
     model.save(str(final_model_path))
     env.close()
     eval_env.close()
+
+    return best_mean_reward
 
 
 if __name__ == "__main__":
